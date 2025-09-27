@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1" />
+  <title>ExoHunter · Analyze Exoplanet Datasets</title>
+
+  <!-- Global styles (to be created next): /static/css/styles.css -->
+  <link rel="stylesheet" href="/static/css/styles.css" />
+
+  <meta name="description" content="ExoHunter — Upload KOI datasets, compute metrics, classify candidates, and prep data for ML anomaly detection." />
+  <meta name="color-scheme" content="light dark" />
+</head>
+<body>
+  <noscript>
+    <div class="no-js-warning" role="alert">
+      JavaScript is required to use ExoHunter.
+    </div>
+  </noscript>
+
+  <!-- Header / Top Nav -->
+  <header class="site-header" role="banner">
+    <nav class="nav container" aria-label="Primary">
+      <div class="brand">
+        <a class="brand-link" href="/">ExoHunter</a>
+      </div>
+      <ul class="nav-list">
+        <li><a href="/">Home</a></li>
+        <li><a href="/results">Results</a></li>
+        <li><a href="/healthz" target="_blank" rel="noopener">Health</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <!-- Hero (background image set in CSS) -->
+  <!-- Set the hero background-image in CSS using:
+       .hero {
+         background-image: url("https://assets.science.nasa.gov/dynamicimage/assets/science/astro/exo-explore/2023/09/h/holiday16x9.jpg?w=1600&h=900&fit=clip&crop=faces%2Cfocalpoint");
+       }
+       Then adjust height (e.g., 36–48vh) and cropping as needed. -->
+  <section class="hero" role="region" aria-label="Header banner">
+    <div class="hero-overlay"></div>
+    <div class="hero-content container">
+      <h1 class="hero-title">ExoHunter</h1>
+      <p class="hero-subtitle">
+        Analyze KOI datasets, compute orbital metrics, classify candidates,
+        and surface <em>anomalous signals</em> for ML review.
+      </p>
+      <a class="btn btn-primary" href="#uploader">Get Started</a>
+    </div>
+  </section>
+
+  <main id="main" class="container" role="main">
+    <!-- Uploader -->
+    <section id="uploader" class="card section">
+      <header class="section-header">
+        <h2>Upload Dataset</h2>
+        <p class="section-subtitle">
+          Upload a local CSV/Parquet or provide a bucket URL. Max size is controlled by <code>MAX_CONTENT_LENGTH_MB</code>.
+        </p>
+      </header>
+
+      <div class="upload-switch">
+        <label class="switch-item">
+          <input type="radio" name="upload-mode" value="file" checked />
+          <span>Local File</span>
+        </label>
+        <label class="switch-item">
+          <input type="radio" name="upload-mode" value="url" />
+          <span>Bucket URL</span>
+        </label>
+      </div>
+
+      <form id="uploadForm" class="form-grid" enctype="multipart/form-data" novalidate>
+        <!-- Local file input -->
+        <div class="form-row" data-mode="file">
+          <label for="fileInput" class="form-label">Select file (.csv or .parquet)</label>
+          <input id="fileInput" name="file" type="file" accept=".csv,.parquet" />
+        </div>
+
+        <!-- Bucket URL input -->
+        <div class="form-row is-hidden" data-mode="url">
+          <label for="bucketUrl" class="form-label">Bucket URL</label>
+          <input id="bucketUrl" name="url" type="url" placeholder="s3://bucket/path/to/data.parquet" />
+        </div>
+
+        <div class="form-actions">
+          <button id="btnUpload" type="submit" class="btn btn-primary">Upload</button>
+          <button id="btnResetUpload" type="button" class="btn btn-ghost">Reset</button>
+        </div>
+      </form>
+
+      <div id="uploadStatus" class="status" role="status" aria-live="polite"></div>
+      <output id="uploadMeta" class="output"></output>
+    </section>
+
+    <!-- Schema detection -->
+    <section id="schema" class="card section">
+      <header class="section-header">
+        <h2>Schema Detection</h2>
+        <p class="section-subtitle">
+          Detected columns are normalized to KOI standard (e.g., <code>koi_period</code>, <code>koi_prad</code>, <code>koi_teq</code>).
+        </p>
+      </header>
+
+      <div class="schema-grid">
+        <div class="schema-summary">
+          <div><strong>File ID:</strong> <span id="fileId">—</span></div>
+          <div><strong>Engine:</strong> <span id="engineName">—</span></div>
+          <div><strong>Rows:</strong> <span id="rowCount">—</span></div>
+        </div>
+
+        <div class="table-wrap">
+          <table id="schemaTable" class="table">
+            <thead>
+              <tr>
+                <th>Detected Column</th>
+                <th>Mapped To</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- Filled by /static/js/app.js -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="helper">
+        <a class="link" href="/api/schema" target="_blank" rel="noopener">View KOI mapping (API)</a>
+      </div>
+    </section>
+
+    <!-- Processing options -->
+    <section id="processing" class="card section">
+      <header class="section-header">
+        <h2>Process Dataset</h2>
+        <p class="section-subtitle">
+          Configure assumptions and thresholds, then compute derived metrics and classifications.
+        </p>
+      </header>
+
+      <form id="processForm" class="form-grid" novalidate>
+        <div class="form-row">
+          <label for="albedo" class="form-label">Assumed Albedo</label>
+          <input id="albedo" name="albedo" type="number" step="0.01" min="0" max="1" value="0.3" />
+        </div>
+
+        <div class="form-row">
+          <label class="checkbox">
+            <input id="autoDerive" name="autoDerive" type="checkbox" checked />
+            <span>Auto-derive metrics (a, T<sub>eq</sub>, Insolation) when missing</span>
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <button id="btnProcess" type="submit" class="btn btn-primary">Run Processing</button>
+          <button id="btnCancelProcess" type="button" class="btn btn-ghost">Cancel</button>
+        </div>
+      </form>
+
+      <div id="processStatus" class="status" role="status" aria-live="polite"></div>
+      <output id="processMeta" class="output"></output>
+    </section>
+
+    <!-- Results quick access -->
+    <section id="results-shortcut" class="card section">
+      <header class="section-header">
+        <h2>Results</h2>
+        <p class="section-subtitle">
+          After processing, download the CSV/JSON report or open the results page.
+        </p>
+      </header>
+
+      <div class="results-actions">
+        <a id="linkResultsPage" class="btn btn-primary" href="/results">Open Results Page</a>
+        <a id="linkDownloadCSV" class="btn btn-ghost" href="#" download>Download CSV</a>
+        <a id="linkDownloadJSON" class="btn btn-ghost" href="#" download>Download JSON</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer" role="contentinfo">
+    <div class="container footer-grid">
+      <div>
+        <strong>ExoHunter</strong><br />
+        <small>© 2025. Anomaly-first exoplanet analytics.</small>
+      </div>
+      <div class="footer-links">
+        <a href="https://exoplanetarchive.ipac.caltech.edu/" target="_blank" rel="noopener">NASA Exoplanet Archive</a>
+        <a href="https://www.nasa.gov/" target="_blank" rel="noopener">NASA</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Global scripts (to be created next): /static/js/app.js -->
+  <script src="/static/js/app.js" defer></script>
+</body>
+</html>
