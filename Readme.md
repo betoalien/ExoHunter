@@ -90,7 +90,7 @@ To explore **ExoHunter** locally, follow these steps:
 
 1.  **Clone the repo:**
     ```bash
-    git clone [https://github.com/betoalien/ExoHunter.git](https://github.com/betoalien/ExoHunter.git)
+    git clone https://github.com/betoalien/ExoHunter.git
     ```
 2.  **Create a virtual environment:**
     ```bash
