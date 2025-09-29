@@ -324,3 +324,8 @@ input:focus {
   padding: 0.75rem;
   text-align: center;
 }
+
+/* Row/cell coloring based on disposition comparison */
+.disp-green { color: #1a7f37; }  /* o bg sutil si prefieres */
+.disp-black { color: inherit; }
+.disp-red   { color: #b42318; }

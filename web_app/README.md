@@ -142,7 +142,7 @@ web_app/
 
 ```bash
 # Clone and enter project
-git clone https://github.com/your-username/ExoHunter.git
+git clone https://github.com/betoalien/ExoHunter.git
 cd ExoHunter/web_app
 
 # Create virtual environment

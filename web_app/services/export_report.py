@@ -4,8 +4,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-
+from typing import Any, Dict, Iterable, List, Optional
 
 # -----------------------------
 # Utilities
@@ -59,11 +58,31 @@ def _write_csv(df, path: Path) -> None:
     df.to_csv(path, index=False)
 
 
+def _rows_json_safe(pdf) -> List[Dict[str, Any]]:
+    """
+    Return a list of dicts with NaN/Inf replaced by None (→ null in JSON).
+    """
+    try:
+        import pandas as pd  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception:
+        # Fallback: to_dict; json.dumps below will fail if NaN remains, but we surface the error
+        return pdf.to_dict(orient="records")
+
+    # Reemplaza infs por NaN primero
+    pdf = pdf.replace([np.inf, -np.inf], np.nan)
+    # Convierte todos los NaN a None (manteniendo tipos)
+    pdf = pdf.where(pd.notnull(pdf), None)
+
+    return pdf.to_dict(orient="records")
+
+
 def _write_json_rows(rows: List[Dict[str, Any]], path: Path, meta: Optional[Dict[str, Any]] = None) -> None:
     payload = {"rows": rows}
     if meta:
         payload.update(meta)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    # allow_nan=False asegura que no se cuele NaN en el JSON
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
 
 
 def _latest_pointers(out_dir: Path, csv_path: Path, json_path: Path) -> None:
@@ -86,7 +105,13 @@ def write_outputs(
     timestamp: Optional[str] = None,
     preferred_order: Optional[Iterable[str]] = (
         "object_id",
+        # Disposición original + nuestra categoría y comparadores primero
+        "koi_disposition",
         "category",
+        "disposition_compare",
+        "is_disposition_match",
+        "color_hint",
+        # Score/flags y métricas clave
         "score",
         "flags",
         "koi_period",
@@ -102,6 +127,7 @@ def write_outputs(
     Args:
         results_df: Pandas DataFrame (or Spark DF) with at least:
                     object_id, category, score, flags (optional koi_* columns)
+                    (y, de ser posible: koi_disposition, disposition_compare, is_disposition_match, color_hint)
         out_dir: destination directory (e.g., data/outputs)
         timestamp: explicit timestamp; if None, one will be generated
         preferred_order: columns to place at the beginning in the CSV
@@ -123,11 +149,12 @@ def write_outputs(
     # CSV
     _write_csv(pdf, csv_path)
 
-    # JSON (rows + meta)
+    # JSON (rows + meta), SANITIZANDO NaN/Inf → null
     meta = {"timestamp": ts, "row_count": int(getattr(pdf, "shape", [0, 0])[0])}
     if extra_meta:
         meta.update(extra_meta)
-    rows = pdf.to_dict(orient="records")
+
+    rows = _rows_json_safe(pdf)
     _write_json_rows(rows, json_path, meta=meta)
 
     # Update "latest" pointers

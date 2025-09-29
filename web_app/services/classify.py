@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+
 def _load_thresholds(thresholds_path: Optional[str]) -> Dict[str, Any]:
     """Load YAML thresholds with safe defaults."""
     defaults: Dict[str, Any] = {
@@ -55,13 +56,29 @@ def _get(df_row: Dict[str, Any], name: str) -> Optional[float]:
         return None
 
 
-def _has(df_row: Dict[str, Any], *cols: str) -> bool:
-    return all(df_row.get(c) is not None for c in cols)
-
-
 def _append_flag(flags: List[str], flag: str) -> None:
     if flag not in flags:
         flags.append(flag)
+
+
+def _normalize_disposition_to_category(disp_raw: Optional[str]) -> Optional[str]:
+    """
+    Normaliza disposiciones de NASA a nuestras categorías base para comparación simple.
+      - CONFIRMED -> confirmed_planet
+      - CANDIDATE -> candidate
+      - FALSE POSITIVE -> likely_false_positive
+    Cualquier otra cosa o vacío -> None
+    """
+    if not disp_raw:
+        return None
+    s = str(disp_raw).strip().upper()
+    if s == "CONFIRMED":
+        return "confirmed_planet"
+    if s == "CANDIDATE":
+        return "candidate"
+    if s == "FALSE POSITIVE":
+        return "likely_false_positive"
+    return None
 
 
 # -----------------------------
@@ -112,11 +129,10 @@ def _evaluate_rules(row: Dict[str, Any], th: Dict[str, Any]) -> Tuple[str, float
         if teq < float(an.get("teq_low", 80)) and depth > 0.01:
             _append_flag(flags, "FLAG_COLD_DEEP_TRANSIT")
 
-    # If we flagged two or más anomalías fuertes, call it anomalous_signal
+    # If we flagged anomalies fuertes, promueve a anomalous_signal
     strong_anomaly_flags = {"FLAG_RADIUS_TOO_LARGE", "FLAG_ANOMALOUS_DEPTH", "FLAG_COLD_DEEP_TRANSIT"}
     strong_hits = sum(1 for fl in flags if fl in strong_anomaly_flags)
     if strong_hits >= 1 or ("FLAG_DURATION_TOO_LONG" in flags and "FLAG_ANOMALOUS_DEPTH" in flags):
-        # Promote to anomalous_signal unless disposition contradicts
         category = "anomalous_signal"
         score = 0.6 + 0.1 * strong_hits  # 0.6 to 0.8
         score = min(score, 0.9)
@@ -133,7 +149,6 @@ def _evaluate_rules(row: Dict[str, Any], th: Dict[str, Any]) -> Tuple[str, float
     in_hab_ins = insol is not None and (ins_min <= insol <= ins_max)
 
     if in_hab_temp or in_hab_ins:
-        # Only set if we didn't detect a strong anomaly
         if category != "anomalous_signal":
             category = "habitable_zone_candidate"
             score = max(score, 0.55)
@@ -159,28 +174,30 @@ def _evaluate_rules(row: Dict[str, Any], th: Dict[str, Any]) -> Tuple[str, float
             if category not in ("anomalous_signal", "confirmed_planet"):
                 category = "super_earth_or_mini_neptune"
                 score = max(score, 0.55)
-        elif prad >= hot_jup_min and (period is not None and period <= hot_jup_pmax or (teq is not None and teq >= hot_min_teq)):
-            # short period OR very hot → hot jupiter-ish
+        elif prad >= hot_jup_min and (
+            (period is not None and period <= hot_jup_pmax) or (teq is not None and teq >= hot_min_teq)
+        ):
             if category != "anomalous_signal":
                 category = "hot_jupiter_candidate"
                 score = max(score, 0.65)
 
     # --- Candidate fallback ---
-    # If we have sane values and none of the above triggered a specific category,
-    # use 'candidate' as a reasonable default (especially when NASA disposition is CANDIDATE)
-    if category in ("no_result",) or (disp == "CANDIDATE" and category not in (
-        "anomalous_signal",
-        "habitable_zone_candidate",
-        "rocky_candidate",
-        "super_earth_or_mini_neptune",
-        "hot_jupiter_candidate",
-    )):
+    if category in ("no_result",) or (
+        disp == "CANDIDATE"
+        and category
+        not in (
+            "anomalous_signal",
+            "habitable_zone_candidate",
+            "rocky_candidate",
+            "super_earth_or_mini_neptune",
+            "hot_jupiter_candidate",
+        )
+    ):
         if any(v is not None for v in (period, prad, teq, insol)):
             category = "candidate"
             score = max(score, 0.5)
 
     # --- No result guard ---
-    # If still nothing useful or obviously broken values, keep no_result
     if category == "no_result":
         _append_flag(flags, "FLAG_INSUFFICIENT_DATA")
 
@@ -208,7 +225,12 @@ def classify_df(df, thresholds_path: Optional[str] = None):
       - category
       - score
       - flags (semicolon-separated)
-      - koi_period, koi_prad, koi_teq, koi_insol (if present)
+      - koi_disposition (original, si venía; None si no)
+      - disposition_compare: missing | match | mismatch
+      - is_disposition_match: True | False | None
+      - color_hint: green | black | red
+      - koi_period, koi_prad, koi_teq, koi_insol (si están)
+
     Notes:
       - Works with a Pandas DataFrame; if Spark DF is passed, will attempt .toPandas().
       - thresholds_path points to configs/thresholds.yaml
@@ -235,21 +257,58 @@ def classify_df(df, thresholds_path: Optional[str] = None):
     # Columns we may want to echo back
     keep_cols = [c for c in ("object_id", "koi_period", "koi_prad", "koi_teq", "koi_insol") if c in df.columns]
 
-    records = []
-    # Iterate rows efficiently
-    it = df[keep_cols + [c for c in ("koi_disposition", "transit_depth", "duration_ratio") if c in df.columns]].to_dict(orient="records")
+    # Iteración
+    # Nota: incluimos koi_disposition si existe para eco y comparación
+    access_cols = keep_cols + [c for c in ("koi_disposition", "transit_depth", "duration_ratio") if c in df.columns]
+    # Evita KeyError si ninguna de las extras existe
+    it = df[access_cols].to_dict(orient="records")
+
+    records: List[Dict[str, Any]] = []
     for row in it:
         category, score, flags = _evaluate_rules(row, th)
-        records.append(
-            {
-                **{k: row.get(k) for k in keep_cols},
-                "category": category,
-                "score": score,
-                "flags": ";".join(flags) if flags else "",
-            }
-        )
 
-    out = pd.DataFrame.from_records(records, columns=keep_cols + ["category", "score", "flags"])
+        disp_raw = row.get("koi_disposition")
+        disp_norm = _normalize_disposition_to_category(disp_raw)
+
+        # Semáforo de comparación
+        if disp_raw is None or (isinstance(disp_raw, float) and math.isnan(disp_raw)) or str(disp_raw).strip() == "":
+            disposition_compare = "missing"
+            is_disposition_match: Optional[bool] = None
+            color_hint = "green"  # Falta en CSV → aportamos nosotros
+        else:
+            if disp_norm is not None and disp_norm == category:
+                disposition_compare = "match"
+                is_disposition_match = True
+                color_hint = "black"  # Coincide
+            else:
+                disposition_compare = "mismatch"
+                is_disposition_match = False
+                color_hint = "red"  # No coincide (p.ej., CSV: candidate, nosotros: anomalous_signal)
+
+        rec = {
+            **{k: row.get(k) for k in keep_cols},
+            "koi_disposition": disp_raw,
+            "category": category,
+            "score": score,
+            "flags": ";".join(flags) if flags else "",
+            "disposition_compare": disposition_compare,
+            "is_disposition_match": is_disposition_match,
+            "color_hint": color_hint,
+        }
+        records.append(rec)
+
+    # Columnas de salida ordenadas
+    out_cols = keep_cols + [
+        "koi_disposition",
+        "category",
+        "score",
+        "flags",
+        "disposition_compare",
+        "is_disposition_match",
+        "color_hint",
+    ]
+
+    out = pd.DataFrame.from_records(records, columns=out_cols)
     return out
 
 

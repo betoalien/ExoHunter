@@ -7,11 +7,16 @@
     content="width=device-width, initial-scale=1" />
   <title>ExoHunter · Results</title>
 
+  <!-- Project CSS -->
   <link rel="stylesheet" href="/static/css/styles.css" />
+
+<!-- CSS de DataTables v2 (vanilla) -->
+<link rel="stylesheet" href="https://cdn.datatables.net/2.3.4/css/dataTables.dataTables.css" />
+
   <meta name="description" content="ExoHunter — View processed results, filter by category, and download CSV/JSON reports." />
   <meta name="color-scheme" content="light dark" />
 </head>
-<body>
+<body data-page="results">
   <header class="site-header" role="banner">
     <nav class="nav container" aria-label="Primary">
       <div class="brand">
@@ -26,7 +31,7 @@
   </header>
 
   <!-- Slim hero for consistency -->
-  <section class="hero" style="max-height: 280px; height: 28vh;" role="region" aria-label="Header banner">
+  <section class="hero hero--slim" role="region" aria-label="Header banner">
     <div class="hero-overlay"></div>
     <div class="hero-content container">
       <h1 class="hero-title">Results</h1>
@@ -55,7 +60,7 @@
       <output id="resultsSummary" class="output" style="display:block; margin-top:0.75rem;"></output>
     </section>
 
-    <!-- Filters -->
+    <!-- Filters (client-side quick filters; DataTables also has its own search box) -->
     <section class="card section">
       <header class="section-header">
         <h2>Filters</h2>
@@ -91,19 +96,49 @@
       </form>
     </section>
 
+          <!-- COLOR SEMAPHORE LEGEND -->
+      <div class="legend" aria-label="Disposition comparison legend" style="margin-bottom:1rem; padding: 0.75rem 1rem; border: 1px solid #ccc; border-radius: 0.5rem;">
+      <strong>Disposition Comparison:</strong>
+      <div style="display:flex; gap: 1rem; margin-top: 0.5rem; flex-wrap: wrap;">
+      <span class="tag tag--green">
+       <span style="color: #1a7f37; font-weight: bold;">Green:</span> Category **missing** from original disposition (our analysis provides a new value).
+       </span><br/>
+      <span class="tag tag--black">
+        <span style="color: inherit; font-weight: bold;">Black:</span> Category **matches** original disposition.
+          </span><br/>
+      <span class="tag tag--red">
+       <span style="color: #b42318; font-weight: bold;">Red:</span> **Mismatch** between our category and original disposition (indicates a discrepancy).
+         </span>
+      </div>
+      </div>
+      <!-- END OF COLOR LEGEND -->
     <!-- Results table -->
     <section class="card section">
       <header class="section-header">
         <h2>Objects</h2>
-        <p class="section-subtitle">Sorted by object_id. Columns shown are a compact subset for quick inspection.</p>
+        <p class="section-subtitle">
+          Paginated and searchable with DataTables. We also surface original disposition next to our category.
+        </p>
       </header>
 
       <div class="table-wrap" style="overflow:auto;">
-        <table id="resultsTable" class="table" aria-describedby="resultsSummary">
+        <!--
+          DataTables note:
+          - We'll initialize DT in /static/js/app.js after rows are fetched.
+          - We'll add row/cell classes based on `color_hint` (green/black/red) or `disposition_compare`.
+          - Columns are intentionally narrow; you can toggle visibility in app.js if needed.
+        -->
+        <table
+          id="resultsTable"
+          class="table display stripe hover"
+          aria-describedby="resultsSummary"
+          data-dt-enable="true"
+          data-dt-page-length="25">
           <thead>
             <tr>
               <th>Object ID</th>
-              <th>Category</th>
+              <th>Original Disposition</th>
+              <th>Category (ExoHunter)</th>
               <th>Score</th>
               <th>Flags</th>
               <th>Period (days)</th>
@@ -113,9 +148,17 @@
             </tr>
           </thead>
           <tbody>
-            <!-- Filled dynamically -->
+            <!-- Filled dynamically by /static/js/app.js -->
           </tbody>
         </table>
+      </div>
+
+      <!-- Legend for coloring -->
+      <div class="legend" aria-label="Disposition comparison legend" style="margin-top:0.75rem;">
+        <strong>Legend:</strong>
+        <span class="tag tag--green">Green = missing disposition (we provide)</span>
+        <span class="tag tag--black">Black = matches disposition</span>
+        <span class="tag tag--red">Red = mismatch vs disposition</span>
       </div>
     </section>
   </main>
@@ -133,133 +176,16 @@
     </div>
   </footer>
 
+   <script src="https://code.jquery.com/jquery-3.7.1.min.js" 
+    integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" 
+    crossorigin="anonymous" defer></script>
+
+<!-- DataTables JS (oficial, sin .min) -->
+<script src="https://cdn.datatables.net/2.3.4/js/dataTables.js" defer></script>
+
+
+  <!-- Project JS -->
   <script src="/static/js/app.js" defer></script>
 
-  <script>
-  (function () {
-    "use strict";
-    const qs = (s, el=document) => el.querySelector(s);
-    const resultsStatus = qs("#resultsStatus");
-    const resultsSummary = qs("#resultsSummary");
-    const resultsTableBody = qs("#resultsTable tbody");
-    const linkDownloadCSV = qs("#linkDownloadCSV");
-    const linkDownloadJSON = qs("#linkDownloadJSON");
-    const filterForm = qs("#filterForm");
-    const searchId = qs("#searchId");
-    const categorySelect = qs("#categorySelect");
-    const btnClearFilters = qs("#btnClearFilters");
-    const btnRefresh = qs("#btnRefreshResults");
-
-    let dataset = [];
-    let loading = false;
-
-    function setStatus(msg, type="info"){
-      resultsStatus.className = `status status--${type}`;
-      resultsStatus.textContent = msg;
-    }
-    function clearTable(){ while (resultsTableBody.firstChild) resultsTableBody.removeChild(resultsTableBody.firstChild); }
-    function safeNumber(v){
-      if (v==null || v==="") return "—";
-      const n=Number(v);
-      if(!Number.isFinite(n)) return String(v);
-      if(Math.abs(n)>=100) return n.toFixed(0);
-      if(Math.abs(n)>=10) return n.toFixed(1);
-      return n.toFixed(2);
-    }
-    function addRow(r){
-      const tr=document.createElement("tr");
-      [r.object_id??"—", r.category??"—", (r.score??"")===""?"—":Number(r.score).toFixed(2),
-       Array.isArray(r.flags)?r.flags.join("; "):(r.flags??"—"),
-       safeNumber(r.koi_period), safeNumber(r.koi_prad), safeNumber(r.koi_teq), safeNumber(r.koi_insol)
-      ].forEach(val=>{ const td=document.createElement("td"); td.textContent=val; tr.appendChild(td); });
-      resultsTableBody.appendChild(tr);
-    }
-    function applyFilters(){
-      const idQuery=(searchId.value||"").trim().toLowerCase();
-      const cat=(categorySelect.value||"").trim();
-      let rows=dataset.slice();
-      if(idQuery) rows=rows.filter(r=>String(r.object_id||"").toLowerCase().includes(idQuery));
-      if(cat) rows=rows.filter(r=>String(r.category||"")===cat);
-      return rows;
-    }
-    function render(ts){
-      const filtered=applyFilters();
-      clearTable(); filtered.forEach(addRow);
-      const summary={ rows_total: dataset.length, rows_shown: filtered.length };
-      if (ts) summary.timestamp = ts;
-      resultsSummary.textContent = JSON.stringify(summary, null, 2);
-    }
-    function setDownloadsEnabled(enabled){
-      const state = enabled ? null : "true";
-      if (enabled) {
-        linkDownloadCSV?.setAttribute("href","/api/result/download/csv");
-        linkDownloadJSON?.setAttribute("href","/api/result/download/json");
-      } else {
-        linkDownloadCSV?.setAttribute("href","#");
-        linkDownloadJSON?.setAttribute("href","#");
-      }
-      // accesibilidad
-      if (state) {
-        linkDownloadCSV?.setAttribute("aria-disabled", state);
-        linkDownloadJSON?.setAttribute("aria-disabled", state);
-      } else {
-        linkDownloadCSV?.removeAttribute("aria-disabled");
-        linkDownloadJSON?.removeAttribute("aria-disabled");
-      }
-    }
-
-    async function refresh(){
-      if (loading) return;
-      loading = true;
-      btnRefresh?.setAttribute("disabled","true");
-      btnRefresh?.setAttribute("aria-busy","true");
-      setStatus("Fetching latest results…","info");
-      try{
-        const resp = await fetch("/api/result/latest");
-        // Intenta extraer mensaje de error si no es OK
-        if(!resp.ok){
-          let errMsg = `HTTP ${resp.status}`;
-          try {
-            const errData = await resp.json();
-            if (errData && errData.error) errMsg = errData.error;
-          } catch(_) {}
-          throw new Error(errMsg);
-        }
-
-        const data = await resp.json();
-        const rows = Array.isArray(data.rows) ? data.rows.map(r=>{
-          const c={...r};
-          if (typeof c.flags==="string") c.flags=c.flags.split(";").filter(Boolean);
-          return c;
-        }) : [];
-
-        dataset = rows;
-
-        setDownloadsEnabled(rows.length > 0);
-        setStatus("Results loaded.","success");
-        render(data.timestamp);
-      }catch(err){
-        console.error(err);
-        setDownloadsEnabled(false);
-        // Muestra el mensaje real del backend si está disponible
-        setStatus(`Error loading results: ${err && err.message ? err.message : "unknown error"}`,"error");
-        // Limpia la tabla/resumen
-        dataset = [];
-        render();
-      }finally{
-        loading = false;
-        btnRefresh?.removeAttribute("disabled");
-        btnRefresh?.removeAttribute("aria-busy");
-      }
-    }
-
-    filterForm.addEventListener("submit",(e)=>{ e.preventDefault(); render(); });
-    btnClearFilters?.addEventListener("click",()=>{ filterForm.reset(); render(); });
-    btnRefresh?.addEventListener("click",()=>{ refresh(); });
-
-    // Primera carga
-    refresh();
-  })();
-  </script>
 </body>
 </html>

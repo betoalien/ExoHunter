@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import re
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Blueprint, jsonify, current_app, send_file  # <-- import send_file
+from flask import Blueprint, jsonify, current_app, send_file
 
 results_bp = Blueprint("results", __name__, url_prefix="/api/result")
 
@@ -95,6 +96,36 @@ def _csv_to_rows(csv_path: Path, limit: Optional[int] = None) -> List[Dict[str, 
     return df.to_dict(orient="records")
 
 
+def _sanitize_scalar(v: Any) -> Any:
+    # Replace NaN / ±Inf with None → null in JSON
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return None
+    return v
+
+
+def _sanitize_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Walk rows and replace any NaN/Inf in scalars, list items, or nested dicts with None.
+    """
+    clean: List[Dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            # unexpected shape, keep as-is
+            clean.append(r)  # type: ignore
+            continue
+        out: Dict[str, Any] = {}
+        for k, v in r.items():
+            if isinstance(v, dict):
+                out[k] = {kk: _sanitize_scalar(vv) for kk, vv in v.items()}
+            elif isinstance(v, list):
+                out[k] = [_sanitize_scalar(x) for x in v]
+            else:
+                out[k] = _sanitize_scalar(v)
+        clean.append(out)
+    return clean
+
+
 # -----------------------------
 # Routes
 # -----------------------------
@@ -122,6 +153,8 @@ def result_latest():
             rows = _csv_to_rows(csv_path, limit=None)
         else:
             return _json_error("No report found in data/outputs/. Run /api/process first.", 404)
+
+        rows = _sanitize_rows(rows)
 
         return jsonify(
             {

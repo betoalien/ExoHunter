@@ -13,7 +13,15 @@
   "koi_slogg": ["koi_slogg", "logg", "stellar_logg", "surface_gravity", "st_logg"],
   "koi_steff": ["koi_steff", "teff", "stellar_teff", "effective_temp", "st_teff"],
 
-  "koi_disposition": ["koi_disposition", "disposition", "nasa_disposition", "pl_disposition"],
+  "koi_disposition": [
+    "koi_disposition",
+    "disposition",
+    "nasa_disposition",
+    "pl_disposition",
+    "final_disposition",
+    "koi_disp",
+    "planet_disposition"
+  ],
 
   "transit_depth": ["depth", "delta_flux", "transit_depth", "koi_depth"],
   "density_est": ["density", "rho", "planet_density", "est_density"],

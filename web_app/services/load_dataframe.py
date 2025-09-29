@@ -31,7 +31,8 @@ def load_df(path: str, engine: str = "pandas", nrows: Optional[int] = None) -> T
               "path": "<path>",
               "format": "csv"|"parquet"|"unknown",
               "encoding": "<encoding if detected for csv>",
-              "delimiter": "<delimiter if csv>"
+              "delimiter": "<delimiter if csv>",
+              "koi_disposition_present": <bool>
             }
     """
     p = Path(path)
@@ -46,21 +47,41 @@ def load_df(path: str, engine: str = "pandas", nrows: Optional[int] = None) -> T
         df = _load_with_spark(p)
         rows = _spark_count_safe(df)
         cols = len(df.columns)
+        # --- preserva/garantiza koi_disposition tal cual o vacío ---
+        if "koi_disposition" not in df.columns:
+            # Crear columna nula (Spark)
+            from pyspark.sql import functions as F  # type: ignore
+            df = df.withColumn("koi_disposition", F.lit(None))
+            koi_disp_present = False
+        else:
+            koi_disp_present = True
+
         meta = {
             "rows": rows,
-            "cols": cols,
+            "cols": cols if "koi_disposition" in df.columns else cols + 1,
             "engine": "spark",
             "columns": df.columns,
             "path": str(p),
             "format": "parquet" if suffix == ".parquet" else "csv" if suffix in (".csv", ".tsv", ".txt") else "unknown",
             "encoding": None,
             "delimiter": None,
+            "koi_disposition_present": koi_disp_present,
         }
         return df, meta
 
     # pandas
     df, meta = _load_with_pandas(p, nrows=nrows)
+    # --- preserva/garantiza koi_disposition tal cual o vacío ---
+    koi_disp_present = "koi_disposition" in df.columns
+    if not koi_disp_present:
+        # Crear columna con None (no transformar ni inferir)
+        df["koi_disposition"] = None
+
     meta["engine"] = "pandas"
+    meta["koi_disposition_present"] = koi_disp_present
+    # Actualizar columnas en meta (por si agregamos la nueva)
+    meta["columns"] = list(df.columns)
+    meta["cols"] = int(meta.get("cols") or len(df.columns))
     return df, meta
 
 
@@ -210,10 +231,7 @@ def _load_with_spark(p: Path):
     if suffix == ".parquet":
         return spark.read.parquet(str(p))
 
-    # CSV: intentar autodetección básica
-    # Spark puede inferSchema, header, y usar delimiter común
-    # Nota: Spark no usa 'encoding' aquí; si tienes archivos con otros encodings,
-    # conviértelo previamente a UTF-8 o usa pandas.
+    # CSV/TSV/TXT
     if suffix in (".csv", ".tsv", ".txt"):
         delim = "\t" if suffix == ".tsv" else ","
         return (
@@ -244,9 +262,6 @@ def _spark_default():
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         .config("spark.sql.session.timeZone", "UTC")
     )
-
-    # Ajustes opcionales por memoria/IO
-    # Puedes parametrizar por env si lo necesitas
     spark = builder.getOrCreate()
     return spark
 
